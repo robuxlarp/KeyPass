@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Key Password Manager</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .auth-screen, .main-screen {
+            display: none;
+        }
+
+        .auth-screen.active, .main-screen.active {
+            display: block;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+        }
+
+        .btn-success {
+            background: #28a745;
+        }
+
+        .status {
+            text-align: center;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .status h2 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .key-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .entry-list {
+            margin-top: 20px;
+        }
+
+        .entry-item {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            border-left: 4px solid #667eea;
+        }
+
+        .entry-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .entry-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .entry-type {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .entry-details {
+            color: #666;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+
+        .entry-actions {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 14px;
+            width: auto;
+            margin-top: 0;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            margin-bottom: 20px;
+        }
+
+        .modal-header h2 {
+            color: #333;
+        }
+
+        .close-modal {
+            float: right;
+            font-size: 28px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 16px;
+            color: #666;
+            transition: all 0.3s;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+            margin-bottom: -2px;
+        }
+
+        .error {
+            background: #dc3545;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .success {
+            background: #28a745;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .filter-group {
+            margin-bottom: 20px;
+        }
+
+        .password-display {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 Security Key Password Manager</h1>
+            <p>Secure your passwords with hardware authentication</p>
+        </div>
+
+        <div class="content">
+            <!-- Authentication Screen -->
+            <div class="auth-screen active">
+                <div class="status">
+                    <div class="key-icon">🔑</div>
+                    <h2>Welcome</h2>
+                    <p>Use your security key (YubiKey, etc.) to access your vault</p>
+                </div>
+
+                <button class="btn" onclick="register()">🔐 Register New Security Key</button>
+                <button class="btn btn-secondary" onclick="authenticate()">🔓 Unlock with Security Key</button>
+                
+                <div id="authError" style="display: none;" class="error"></div>
+            </div>
+
+            <!-- Main Screen -->
+            <div class="main-screen">
+                <div class="status">
+                    <h2>🎉 Vault Unlocked</h2>
+                    <p>Your vault is secured with hardware authentication</p>
+                </div>
+
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('view')">View Entries</button>
+                    <button class="tab" onclick="switchTab('add')">Add Entry</button>
+                </div>
+
+                <div id="viewTab" class="tab-content">
+                    <div class="filter-group">
+                        <label>Filter by type:</label>
+                        <select id="filterType" onchange="filterEntries()">
+                            <option value="all">All Types</option>
+                            <option value="password">Passwords</option>
+                            <option value="otp">OTP Codes</option>
+                            <option value="backup">Backup Codes</option>
+                        </select>
+                    </div>
+
+                    <div class="entry-list" id="entryList">
+                        <p style="text-align: center; color: #999;">No entries yet. Add your first password, OTP, or backup code!</p>
+                    </div>
+                </div>
+
+                <div id="addTab" class="tab-content" style="display: none;">
+                    <form id="addEntryForm" onsubmit="addEntry(event)">
+                        <div class="form-group">
+                            <label>Entry Type</label>
+                            <select id="entryType" onchange="updateFormFields()">
+                                <option value="password">Password</option>
+                                <option value="otp">OTP Code</option>
+                                <option value="backup">Backup Codes</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Title/Service Name</label>
+                            <input type="text" id="entryTitle" required placeholder="e.g., Gmail, Discord, GitHub">
+                        </div>
+
+                        <div class="form-group" id="usernameField">
+                            <label>Username/Email</label>
+                            <input type="text" id="entryUsername" placeholder="your.email@example.com">
+                        </div>
+
+                        <div class="form-group" id="passwordField">
+                            <label>Password</label>
+                            <input type="password" id="entryPassword" placeholder="Enter your password">
+                        </div>
+
+                        <div class="form-group" id="otpField" style="display: none;">
+                            <label>OTP Secret Key</label>
+                            <input type="text" id="entryOTP" placeholder="Base32 secret key">
+                        </div>
+
+                        <div class="form-group" id="backupField" style="display: none;">
+                            <label>Backup Codes (one per line)</label>
+                            <textarea id="entryBackup" placeholder="ABC123&#10;DEF456&#10;GHI789"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Notes (optional)</label>
+                            <textarea id="entryNotes" placeholder="Any additional information..."></textarea>
+                        </div>
+
+                        <button type="submit" class="btn btn-success">💾 Save Entry</button>
+                    </form>
+                </div>
+
+                <button class="btn btn-danger" onclick="logout()" style="margin-top: 30px;">🔒 Lock Vault</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Entry Modal -->
+    <div id="viewModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close-modal" onclick="closeModal()">&times;</span>
+                <h2 id="modalTitle"></h2>
+            </div>
+            <div id="modalBody"></div>
+            <button class="btn btn-danger btn-small" onclick="deleteCurrentEntry()">Delete Entry</button>
+            <button class="btn btn-secondary btn-small" onclick="closeModal()">Close</button>
+        </div>
+    </div>
+
+    <script>
+        let credential = null;
+        let vault = [];
+        let currentViewingEntry = null;
+
+        // Check if WebAuthn is supported
+        if (!window.PublicKeyCredential) {
+            document.querySelector('.auth-screen').innerHTML = '<div class="error">WebAuthn is not supported in your browser. Please use a modern browser like Chrome, Firefox, or Edge.</div>';
+        }
+
+        async function register() {
+            try {
+                const challenge = new Uint8Array(32);
+                crypto.getRandomValues(challenge);
+
+                const publicKeyOptions = {
+                    challenge: challenge,
+                    rp: {
+                        name: "Password Manager",
+                        id: window.location.hostname
+                    },
+                    user: {
+                        id: new Uint8Array(16),
+                        name: "user@passwordmanager.local",
+                        displayName: "Password Manager User"
+                    },
+                    pubKeyCredParams: [
+                        { type: "public-key", alg: -7 },
+                        { type: "public-key", alg: -257 }
+                    ],
+                    authenticatorSelection: {
+                        authenticatorAttachment: "cross-platform",
+                        requireResidentKey: false,
+                        userVerification: "preferred"
+                    },
+                    timeout: 60000,
+                    attestation: "none"
+                };
+
+                credential = await navigator.credentials.create({
+                    publicKey: publicKeyOptions
+                });
+
+                // Store credential ID
+                const credentialId = Array.from(new Uint8Array(credential.rawId));
+                localStorage.setItem('credentialId', JSON.stringify(credentialId));
+                
+                showSuccess('Security key registered successfully!');
+                
+                // Automatically authenticate after registration
+                setTimeout(() => {
+                    unlockVault();
+                }, 1500);
+
+            } catch (error) {
+                showError('Registration failed: ' + error.message);
+            }
+        }
+
+        async function authenticate() {
+            try {
+                const storedId = localStorage.getItem('credentialId');
+                if (!storedId) {
+                    showError('No security key registered. Please register first.');
+                    return;
+                }
+
+                const credentialId = new Uint8Array(JSON.parse(storedId));
+                const challenge = new Uint8Array(32);
+                crypto.getRandomValues(challenge);
+
+                const publicKeyOptions = {
+                    challenge: challenge,
+                    allowCredentials: [{
+                        type: "public-key",
+                        id: credentialId,
+                        transports: ["usb", "nfc", "ble"]
+                    }],
+                    timeout: 60000,
+                    userVerification: "preferred"
+                };
+
+                credential = await navigator.credentials.get({
+                    publicKey: publicKeyOptions
+                });
+
+                unlockVault();
+
+            } catch (error) {
+                showError('Authentication failed: ' + error.message);
+            }
+        }
+
+        function unlockVault() {
+            // Load vault data from localStorage
+            const storedVault = localStorage.getItem('vault');
+            if (storedVault) {
+                vault = JSON.parse(storedVault);
+            }
+
+            document.querySelector('.auth-screen').classList.remove('active');
+            document.querySelector('.main-screen').classList.add('active');
+            renderEntries();
+        }
+
+        function logout() {
+            credential = null;
+            vault = [];
+            document.querySelector('.main-screen').classList.remove('active');
+            document.querySelector('.auth-screen').classList.add('active');
+        }
+
+        function updateFormFields() {
+            const type = document.getElementById('entryType').value;
+            
+            document.getElementById('usernameField').style.display = type === 'password' ? 'block' : 'none';
+            document.getElementById('passwordField').style.display = type === 'password' ? 'block' : 'none';
+            document.getElementById('otpField').style.display = type === 'otp' ? 'block' : 'none';
+            document.getElementById('backupField').style.display = type === 'backup' ? 'block' : 'none';
+        }
+
+        function addEntry(event) {
+            event.preventDefault();
+
+            const type = document.getElementById('entryType').value;
+            const title = document.getElementById('entryTitle').value;
+            const notes = document.getElementById('entryNotes').value;
+
+            const entry = {
+                id: Date.now(),
+                type: type,
+                title: title,
+                notes: notes,
+                created: new Date().toISOString()
+            };
+
+            if (type === 'password') {
+                entry.username = document.getElementById('entryUsername').value;
+                entry.password = document.getElementById('entryPassword').value;
+            } else if (type === 'otp') {
+                entry.secret = document.getElementById('entryOTP').value;
+            } else if (type === 'backup') {
+                entry.codes = document.getElementById('entryBackup').value.split('\n').filter(c => c.trim());
+            }
+
+            vault.push(entry);
+            localStorage.setItem('vault', JSON.stringify(vault));
+
+            // Reset form
+            document.getElementById('addEntryForm').reset();
+            switchTab('view');
+            renderEntries();
+            
+            showSuccess('Entry added successfully!');
+        }
+
+        function renderEntries() {
+            const filterType = document.getElementById('filterType').value;
+            const filtered = filterType === 'all' ? vault : vault.filter(e => e.type === filterType);
+
+            const entryList = document.getElementById('entryList');
+            
+            if (filtered.length === 0) {
+                entryList.innerHTML = '<p style="text-align: center; color: #999;">No entries found.</p>';
+                return;
+            }
+
+            entryList.innerHTML = filtered.map(entry => `
+                <div class="entry-item">
+                    <div class="entry-header">
+                        <div class="entry-title">${escapeHtml(entry.title)}</div>
+                        <div class="entry-type">${entry.type}</div>
+                    </div>
+                    <div class="entry-details">
+                        ${entry.username ? `Username: ${escapeHtml(entry.username)}<br>` : ''}
+                        Created: ${new Date(entry.created).toLocaleDateString()}
+                    </div>
+                    <div class="entry-actions">
+                        <button class="btn btn-small" onclick="viewEntry(${entry.id})">👁️ View Details</button>
+                        <button class="btn btn-small btn-secondary" onclick="copyToClipboard(${entry.id})">📋 Copy</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function viewEntry(id) {
+            const entry = vault.find(e => e.id === id);
+            if (!entry) return;
+
+            currentViewingEntry = entry;
+
+            document.getElementById('modalTitle').textContent = entry.title;
+            
+            let bodyHTML = `<p><strong>Type:</strong> ${entry.type}</p>`;
+            bodyHTML += `<p><strong>Created:</strong> ${new Date(entry.created).toLocaleString()}</p>`;
+
+            if (entry.username) {
+                bodyHTML += `<p><strong>Username:</strong> ${escapeHtml(entry.username)}</p>`;
+            }
+
+            if (entry.password) {
+                bodyHTML += `<p><strong>Password:</strong></p>`;
+                bodyHTML += `<div class="password-display">${escapeHtml(entry.password)}</div>`;
+            }
+
+            if (entry.secret) {
+                bodyHTML += `<p><strong>OTP Secret:</strong></p>`;
+                bodyHTML += `<div class="password-display">${escapeHtml(entry.secret)}</div>`;
+            }
+
+            if (entry.codes) {
+                bodyHTML += `<p><strong>Backup Codes:</strong></p>`;
+                bodyHTML += `<div class="password-display">${entry.codes.map(c => escapeHtml(c)).join('<br>')}</div>`;
+            }
+
+            if (entry.notes) {
+                bodyHTML += `<p><strong>Notes:</strong></p>`;
+                bodyHTML += `<p>${escapeHtml(entry.notes)}</p>`;
+            }
+
+            document.getElementById('modalBody').innerHTML = bodyHTML;
+            document.getElementById('viewModal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('viewModal').classList.remove('active');
+            currentViewingEntry = null;
+        }
+
+        function deleteCurrentEntry() {
+            if (!currentViewingEntry) return;
+
+            if (confirm('Are you sure you want to delete this entry?')) {
+                vault = vault.filter(e => e.id !== currentViewingEntry.id);
+                localStorage.setItem('vault', JSON.stringify(vault));
+                closeModal();
+                renderEntries();
+                showSuccess('Entry deleted successfully!');
+            }
+        }
+
+        function copyToClipboard(id) {
+            const entry = vault.find(e => e.id === id);
+            if (!entry) return;
+
+            let textToCopy = '';
+            
+            if (entry.password) {
+                textToCopy = entry.password;
+            } else if (entry.secret) {
+                textToCopy = entry.secret;
+            } else if (entry.codes) {
+                textToCopy = entry.codes.join('\n');
+            }
+
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                showSuccess('Copied to clipboard!');
+            }).catch(() => {
+                showError('Failed to copy to clipboard');
+            });
+        }
+
+        function filterEntries() {
+            renderEntries();
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+
+            if (tab === 'view') {
+                document.querySelectorAll('.tab')[0].classList.add('active');
+                document.getElementById('viewTab').style.display = 'block';
+            } else {
+                document.querySelectorAll('.tab')[1].classList.add('active');
+                document.getElementById('addTab').style.display = 'block';
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('authError');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => errorDiv.style.display = 'none', 5000);
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.createElement('div');
+            successDiv.className = 'success';
+            successDiv.textContent = message;
+            document.querySelector('.content').insertBefore(successDiv, document.querySelector('.content').firstChild);
+            setTimeout(() => successDiv.remove(), 3000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
