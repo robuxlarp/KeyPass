@@ -955,16 +955,14 @@
     </div>
 
     <script>
+        // New category-based vault with TOTP support
         let currentUser = null;
-        let vault = [];
+        let categories = []; // each category: {id, name, username, email, entries: []}
         let currentSection = 'passwords';
-        let currentViewingEntry = null;
+        let currentViewing = null;
+        let otpTimer = null;
 
-        // Check WebAuthn support
-        if (!window.PublicKeyCredential) {
-            showAlert('WebAuthn not supported. Please use a modern browser.', 'error');
-        }
-
+        // --- small helpers ---
         function showAlert(message, type = 'error') {
             const container = document.getElementById('alertContainer');
             const alert = document.createElement('div');
@@ -974,196 +972,181 @@
             setTimeout(() => alert.remove(), 5000);
         }
 
-        function showLogin() {
-            document.getElementById('loginForm').style.display = 'block';
-            document.getElementById('registerForm').style.display = 'none';
+        function escapeHtml(text = '') {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
-        function showRegister() {
-            document.getElementById('loginForm').style.display = 'none';
-            document.getElementById('registerForm').style.display = 'block';
-        }
-
+        // --- WebAuthn (unchanged) ---
         async function registerWithKey() {
             const username = document.getElementById('registerUsername').value.trim();
             const email = document.getElementById('registerEmail').value.trim() || `${username}@vaultkey.local`;
 
-            if (!username) {
-                showAlert('Please enter a username', 'error');
-                return;
-            }
+            if (!username) { showAlert('Please enter a username', 'error'); return; }
 
             try {
                 const challenge = new Uint8Array(32);
                 crypto.getRandomValues(challenge);
-
                 const userId = new Uint8Array(16);
                 crypto.getRandomValues(userId);
 
                 const publicKeyOptions = {
-                    challenge: challenge,
-                    rp: {
-                        name: "VaultKey Password Manager",
-                        id: window.location.hostname
-                    },
-                    user: {
-                        id: userId,
-                        name: username,
-                        displayName: username
-                    },
-                    pubKeyCredParams: [
-                        { type: "public-key", alg: -7 },
-                        { type: "public-key", alg: -257 }
-                    ],
-                    authenticatorSelection: {
-                        authenticatorAttachment: "cross-platform",
-                        requireResidentKey: false,
-                        userVerification: "preferred"
-                    },
+                    challenge,
+                    rp: { name: "VaultKey Password Manager" },
+                    user: { id: userId, name: username, displayName: username },
+                    pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+                    authenticatorSelection: { authenticatorAttachment: "cross-platform", requireResidentKey: false, userVerification: "preferred" },
                     timeout: 60000,
                     attestation: "none"
                 };
 
-                const credential = await navigator.credentials.create({
-                    publicKey: publicKeyOptions
-                });
+                const credential = await navigator.credentials.create({ publicKey: publicKeyOptions });
+                const credentialId = Array.from(new Uint8Array(credential.rawId || new ArrayBuffer(0)));
 
-                const credentialId = Array.from(new Uint8Array(credential.rawId));
-                
-                const userData = {
-                    username: username,
-                    email: email,
-                    credentialId: credentialId,
-                    createdAt: new Date().toISOString()
-                };
-
+                const userData = { username, email, credentialId, createdAt: new Date().toISOString() };
                 localStorage.setItem('vaultkey_user', JSON.stringify(userData));
-                
                 showAlert('Account created successfully!', 'success');
-                
-                setTimeout(() => {
-                    currentUser = userData;
-                    initDashboard();
-                }, 1500);
+                setTimeout(() => { currentUser = userData; initDashboard(); }, 700);
 
-            } catch (error) {
-                console.error(error);
+            } catch (err) {
+                console.error(err);
                 showAlert('Failed to register security key. Make sure your key is inserted.', 'error');
             }
         }
 
         async function loginWithKey() {
             const username = document.getElementById('loginUsername').value.trim();
-
-            if (!username) {
-                showAlert('Please enter your username', 'error');
-                return;
-            }
-
+            if (!username) { showAlert('Please enter your username', 'error'); return; }
             const storedUser = localStorage.getItem('vaultkey_user');
-            if (!storedUser) {
-                showAlert('No account found. Please register first.', 'error');
-                return;
-            }
-
+            if (!storedUser) { showAlert('No account found. Please register first.', 'error'); return; }
             const userData = JSON.parse(storedUser);
-            
-            if (userData.username !== username) {
-                showAlert('Username not found', 'error');
-                return;
-            }
+            if (userData.username !== username) { showAlert('Username not found', 'error'); return; }
 
             try {
-                const credentialId = new Uint8Array(userData.credentialId);
-                const challenge = new Uint8Array(32);
-                crypto.getRandomValues(challenge);
-
-                const publicKeyOptions = {
-                    challenge: challenge,
-                    allowCredentials: [{
-                        type: "public-key",
-                        id: credentialId,
-                        transports: ["usb", "nfc", "ble"]
-                    }],
-                    timeout: 60000,
-                    userVerification: "preferred"
-                };
-
-                await navigator.credentials.get({
-                    publicKey: publicKeyOptions
-                });
-
-                currentUser = userData;
-                initDashboard();
-
-            } catch (error) {
-                console.error(error);
+                const credentialId = new Uint8Array(userData.credentialId || []);
+                const challenge = new Uint8Array(32); crypto.getRandomValues(challenge);
+                const publicKeyOptions = { challenge, allowCredentials: [{ type: 'public-key', id: credentialId }], timeout: 60000, userVerification: 'preferred' };
+                await navigator.credentials.get({ publicKey: publicKeyOptions });
+                currentUser = userData; initDashboard();
+            } catch (err) {
+                console.error(err);
                 showAlert('Authentication failed. Please try again.', 'error');
             }
         }
 
+        // --- Category & Vault Persistence ---
         function initDashboard() {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('dashboard').classList.add('active');
-
             document.getElementById('userName').textContent = currentUser.username;
             document.getElementById('userEmail').textContent = currentUser.email;
             document.getElementById('userAvatar').textContent = currentUser.username[0].toUpperCase();
 
-            loadVault();
+            loadCategories();
+            renderCategoriesList();
             updateStats();
             renderEntries();
+            startOTPTimer();
         }
 
-        function loadVault() {
-            const stored = localStorage.getItem(`vault_${currentUser.username}`);
-            if (stored) {
-                vault = JSON.parse(stored);
+        function loadCategories() {
+            // Support migration from old vault (array of entries)
+            const keyNew = `vault_${currentUser.username}_categories`;
+            const keyOld = `vault_${currentUser.username}`;
+
+            const rawNew = localStorage.getItem(keyNew);
+            if (rawNew) { categories = JSON.parse(rawNew); return; }
+
+            const rawOld = localStorage.getItem(keyOld);
+            if (rawOld) {
+                try {
+                    const oldEntries = JSON.parse(rawOld);
+                    const defaultCategory = { id: Date.now(), name: 'Default', username: currentUser.email || currentUser.username, email: currentUser.email || '', entries: oldEntries.map(e => ({ ...e })) };
+                    categories = [defaultCategory];
+                    saveCategories();
+                    return;
+                } catch (e) { console.error('Failed to migrate old vault', e); }
             }
+
+            categories = [];
         }
 
-        function saveVault() {
-            localStorage.setItem(`vault_${currentUser.username}`, JSON.stringify(vault));
+        function saveCategories() {
+            const key = `vault_${currentUser.username}_categories`;
+            localStorage.setItem(key, JSON.stringify(categories));
             updateStats();
+            renderEntries();
+            renderCategoriesList();
+        }
+
+        // --- Categories UI ---
+        function renderCategoriesList() {
+            let container = document.getElementById('categoriesList');
+            if (!container) {
+                const nav = document.querySelector('.nav-menu');
+                container = document.createElement('div');
+                container.id = 'categoriesList';
+                container.style.padding = '12px 0 20px 0';
+                nav.appendChild(container);
+            }
+
+            if (categories.length === 0) {
+                container.innerHTML = `<div style="padding: 12px 25px; color: #9ca3af; font-size: 13px;">No categories. Create one when adding an item.</div>`;
+                return;
+            }
+
+            container.innerHTML = categories.map(cat => `
+                <div class="nav-item" style="padding-left:25px;" onclick="filterByCategory(${cat.id})">
+                    <span class="nav-icon">👥</span>
+                    <span class="nav-label">${escapeHtml(cat.name)} <span style="color:#6b7280; font-size:12px;">${cat.username ? '• ' + escapeHtml(cat.username) : ''}</span></span>
+                </div>
+            `).join('');
+        }
+
+        function filterByCategory(catId) {
+            currentSection = `category:${catId}`;
+            const cat = categories.find(c => c.id === catId);
+            document.getElementById('sectionTitle').textContent = cat ? `Category: ${cat.name}` : 'Category';
             renderEntries();
         }
 
-        function updateStats() {
-            const passwords = vault.filter(e => e.type === 'password').length;
-            const otp = vault.filter(e => e.type === 'otp').length;
-            const backup = vault.filter(e => e.type === 'backup').length;
+        // Keep the original top-level section behavior
+        function showSection(section) {
+            currentSection = section;
+            const titles = { 'passwords': 'Passwords', 'otp': 'OTP Codes', 'backup': 'Backup Codes', 'all': 'All Items' };
+            document.getElementById('sectionTitle').textContent = titles[section] || titles['all'];
+            // toggle active class on nav items by matching .nav-label text
+            document.querySelectorAll('.nav-item').forEach(item => {
+                const label = item.querySelector('.nav-label');
+                if (!label) return;
+                if (label.textContent.trim() === (titles[section] || '')) item.classList.add('active'); else item.classList.remove('active');
+            });
+            renderEntries();
+        }
 
+        // --- Stats ---
+        function updateStats() {
+            let passwords = 0, otp = 0, backup = 0, total = 0;
+            categories.forEach(c => { total += c.entries.length; c.entries.forEach(e => { if (e.type === 'password') passwords++; if (e.type === 'otp') otp++; if (e.type === 'backup') backup++; }); });
             document.getElementById('passwordCount').textContent = passwords;
             document.getElementById('otpCount').textContent = otp;
             document.getElementById('backupCount').textContent = backup;
-            document.getElementById('totalCount').textContent = vault.length;
+            document.getElementById('totalCount').textContent = total;
         }
 
-        function showSection(section) {
-            currentSection = section;
-            
-            document.querySelectorAll('.nav-item').forEach(item => {
-                item.classList.remove('active');
-            });
-            event.target.closest('.nav-item').classList.add('active');
-
-            const titles = {
-                'passwords': 'Passwords',
-                'otp': 'OTP Codes',
-                'backup': 'Backup Codes',
-                'all': 'All Items'
-            };
-
-            document.getElementById('sectionTitle').textContent = titles[section];
-            renderEntries();
-        }
-
+        // --- Entry rendering ---
         function renderEntries() {
             const container = document.getElementById('entriesContainer');
-            
-            let filtered = vault;
-            if (currentSection !== 'all') {
-                filtered = vault.filter(e => e.type === currentSection);
+            let all = [];
+            categories.forEach(cat => { cat.entries.forEach(e => all.push({ ...e, categoryId: cat.id, categoryName: cat.name, categoryUsername: cat.username })); });
+
+            let filtered = all;
+            if (currentSection === 'passwords' || currentSection === 'otp' || currentSection === 'backup') {
+                filtered = all.filter(e => e.type === currentSection);
+                document.getElementById('sectionTitle').textContent = ({passwords:'Passwords', otp:'OTP Codes', backup:'Backup Codes'})[currentSection];
+            } else if (currentSection && currentSection.startsWith('category:')) {
+                const id = Number(currentSection.split(':')[1]); filtered = all.filter(e => e.categoryId === id);
             }
 
             if (filtered.length === 0) {
@@ -1177,236 +1160,167 @@
                 return;
             }
 
-            const icons = {
-                'password': '🔑',
-                'otp': '📱',
-                'backup': '📋'
-            };
+            const icons = { password: '🔑', otp: '📱', backup: '📋' };
 
             container.innerHTML = filtered.map(entry => `
-                <div class="entry-card" onclick="viewEntry(${entry.id})">
+                <div class="entry-card" onclick="viewEntry('${entry.categoryId}', ${entry.id})">
                     <div class="entry-icon">${icons[entry.type]}</div>
                     <div class="entry-info">
                         <div class="entry-title">${escapeHtml(entry.title)}</div>
                         <div class="entry-meta">
                             <span class="tag ${entry.type === 'otp' ? 'tag-otp' : entry.type === 'backup' ? 'tag-backup' : ''}">${entry.type}</span>
-                            ${entry.username ? ' • ' + escapeHtml(entry.username) : ''}
+                            ${entry.categoryUsername ? ' • ' + escapeHtml(entry.categoryUsername) : entry.username ? ' • ' + escapeHtml(entry.username) : ''}
                         </div>
                     </div>
                     <div class="entry-actions" onclick="event.stopPropagation()">
-                        <div class="entry-action-btn" onclick="copyEntry(${entry.id})" title="Copy">📋</div>
-                        <div class="entry-action-btn" onclick="viewEntry(${entry.id})" title="View">👁️</div>
+                        <div class="entry-action-btn" onclick="copyEntry('${entry.categoryId}', ${entry.id})" title="Copy">📋</div>
+                        <div class="entry-action-btn" onclick="viewEntry('${entry.categoryId}', ${entry.id})" title="View">👁️</div>
                     </div>
                 </div>
             `).join('');
+
+            updateOTPCodes();
         }
 
+        // --- Add/Edit modal behavior ---
         function openAddModal() {
             document.getElementById('addModal').classList.add('active');
             document.getElementById('modalTitle').textContent = 'Add New Item';
-            document.getElementById('entryType').value = currentSection === 'all' ? 'password' : currentSection;
+            document.getElementById('entryType').value = (currentSection && currentSection.startsWith('category:')) ? 'password' : currentSection === 'all' ? 'password' : currentSection;
+            const select = document.getElementById('entryCategory');
+            select.innerHTML = categories.map(c => `<option value="${c.id}">${escapeHtml(c.name)} ${c.username ? ' • ' + escapeHtml(c.username) : ''}</option>`).join('');
+            select.insertAdjacentHTML('beforeend', '<option value="__new">+ Create new category</option>');
+            document.getElementById('newCategoryWrapper').style.display = 'none';
             updateEntryFields();
         }
 
-        function closeAddModal() {
-            document.getElementById('addModal').classList.remove('active');
-            document.querySelector('#addModal form').reset();
-        }
+        function closeAddModal() { document.getElementById('addModal').classList.remove('active'); document.querySelector('#addModal form').reset(); }
 
         function updateEntryFields() {
             const type = document.getElementById('entryType').value;
-            
             document.getElementById('usernameGroup').style.display = type === 'password' ? 'block' : 'none';
             document.getElementById('passwordGroup').style.display = type === 'password' ? 'block' : 'none';
             document.getElementById('otpGroup').style.display = type === 'otp' ? 'block' : 'none';
             document.getElementById('backupGroup').style.display = type === 'backup' ? 'block' : 'none';
         }
 
+        function onCategorySelectChange() { const val = document.getElementById('entryCategory').value; document.getElementById('newCategoryWrapper').style.display = val === '__new' ? 'block' : 'none'; }
+
+        function addCategory(name, username = '', email = '') { const cat = { id: Date.now() + Math.floor(Math.random()*1000), name, username, email, entries: [] }; categories.push(cat); saveCategories(); return cat; }
+
         function saveEntry(event) {
             event.preventDefault();
-
-            const type = document.getElementById('entryType').value;
-            const title = document.getElementById('entryTitle').value;
-            const notes = document.getElementById('entryNotes').value;
-
-            const entry = {
-                id: Date.now(),
-                type: type,
-                title: title,
-                notes: notes,
-                created: new Date().toISOString()
-            };
-
-            if (type === 'password') {
-                entry.username = document.getElementById('entryUsername').value;
-                entry.password = document.getElementById('entryPassword').value;
-            } else if (type === 'otp') {
-                entry.secret = document.getElementById('entryOTP').value;
-            } else if (type === 'backup') {
-                entry.codes = document.getElementById('entryBackup').value.split('\n').filter(c => c.trim());
-            }
-
-            vault.push(entry);
-            saveVault();
-            closeAddModal();
-            
-            const alert = document.createElement('div');
-            alert.className = 'alert alert-success';
-            alert.textContent = 'Item saved successfully!';
-            alert.style.position = 'fixed';
-            alert.style.top = '20px';
-            alert.style.right = '20px';
-            alert.style.zIndex = '10000';
-            document.body.appendChild(alert);
-            setTimeout(() => alert.remove(), 3000);
+            const type = document.getElementById('entryType').value; const title = document.getElementById('entryTitle').value.trim(); const notes = document.getElementById('entryNotes').value;
+            let catId = document.getElementById('entryCategory') ? document.getElementById('entryCategory').value : null;
+            if (catId === '__new') {
+                const newName = document.getElementById('newCategoryName').value.trim() || 'New Category';
+                const newUser = document.getElementById('newCategoryUsername').value.trim() || '';
+                const newEmail = document.getElementById('newCategoryEmail').value.trim() || '';
+                const c = addCategory(newName, newUser, newEmail); catId = c.id;
+            } else if (!catId && categories.length > 0) { catId = categories[0].id; }
+            if (!catId) { const c = addCategory('Default', currentUser.email || currentUser.username, currentUser.email || ''); catId = c.id; }
+            const entry = { id: Date.now(), type, title, notes, created: new Date().toISOString() };
+            if (type === 'password') { entry.username = document.getElementById('entryUsername').value; entry.password = document.getElementById('entryPassword').value; }
+            else if (type === 'otp') { entry.secret = document.getElementById('entryOTP').value.trim(); }
+            else if (type === 'backup') { entry.codes = document.getElementById('entryBackup').value.split('\n').filter(c => c.trim()); }
+            const cat = categories.find(c => c.id == catId); if (!cat) { showAlert('Category not found', 'error'); return; }
+            cat.entries.push(entry); saveCategories(); closeAddModal(); showTempMessage('Item saved successfully!');
         }
 
-        function viewEntry(id) {
-            const entry = vault.find(e => e.id === id);
-            if (!entry) return;
+        function showTempMessage(msg) { const alert = document.createElement('div'); alert.className = 'alert alert-success'; alert.textContent = msg; alert.style.position = 'fixed'; alert.style.top = '20px'; alert.style.right = '20px'; alert.style.zIndex = '10000'; document.body.appendChild(alert); setTimeout(() => alert.remove(), 2500); }
 
-            currentViewingEntry = entry;
-
+        function viewEntry(categoryId, entryId) {
+            const cat = categories.find(c => c.id == categoryId); if (!cat) return; const entry = cat.entries.find(e => e.id == entryId); if (!entry) return; currentViewing = { cat, entry };
             document.getElementById('viewModalTitle').textContent = entry.title;
-            
-            let bodyHTML = `
-                <div style="margin-bottom: 20px;">
-                    <span class="tag ${entry.type === 'otp' ? 'tag-otp' : entry.type === 'backup' ? 'tag-backup' : ''}">${entry.type}</span>
+            let bodyHTML = `<div style="margin-bottom:20px;"><span class="tag ${entry.type === 'otp' ? 'tag-otp' : entry.type === 'backup' ? 'tag-backup' : ''}">${entry.type}</span> <div style="color:#6b7280; font-size:12px;">Category: ${escapeHtml(cat.name)} ${cat.username ? ' • ' + escapeHtml(cat.username) : ''}</div></div>`;
+            if (entry.username || cat.username) { bodyHTML += `<div style="margin-bottom:20px;"><div style="color:#9ca3af; font-size:13px; margin-bottom:8px;">Username / Email</div><div style="padding:12px; background: rgba(17,24,39,0.6); border-radius:8px; font-family:'Courier New', monospace;">${escapeHtml(entry.username || cat.username)}</div></div>`; }
+            if (entry.password) { bodyHTML += `<div style="margin-bottom:20px;"><div style="color:#9ca3af; font-size:13px; margin-bottom:8px;">Password</div><div style="padding:12px; background: rgba(17,24,39,0.6); border-radius:8px; font-family:'Courier New', monospace; word-break:break-all;">${escapeHtml(entry.password)}</div></div>`; }
+            if (entry.secret) { bodyHTML += `<div style="margin-bottom:20px;"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><div style="color:#9ca3af; font-size:13px;">Current OTP</div><div id="viewOtpCopyBtn" style="font-size:13px; color:#0ea5e9; cursor:pointer;">Copy</div></div><div id="viewOtpCode" style="padding:12px; background: rgba(17,24,39,0.6); border-radius:8px; font-family:'Courier New', monospace; font-size:20px; letter-spacing:2px;">••••••</div><div id="viewOtpProgress" style="height:6px; background:rgba(255,255,255,0.05); border-radius:6px; margin-top:8px;"><div id="viewOtpBar" style="height:6px; background:linear-gradient(90deg,#0ea5e9,#a855f7); width:0%; border-radius:6px;"></div></div></div>`; }
+            if (entry.codes && entry.codes.length > 0) { bodyHTML += `<div style="margin-bottom:20px;"><div style="color:#9ca3af; font-size:13px; margin-bottom:8px;">Backup Codes</div><div style="padding:12px; background: rgba(17,24,39,0.6); border-radius:8px; font-family:'Courier New', monospace;">${entry.codes.map(c => escapeHtml(c)).join('<br>')}</div></div>`; }
+            if (entry.notes) { bodyHTML += `<div style="margin-bottom:20px;"><div style="color:#9ca3af; font-size:13px; margin-bottom:8px;">Notes</div><div style="padding:12px; background: rgba(17,24,39,0.6); border-radius:8px;">${escapeHtml(entry.notes)}</div></div>`; }
+            bodyHTML += `<div style="color:#6b7280; font-size:12px; margin-top:20px;">Created: ${new Date(entry.created).toLocaleString()}</div>`;
+            document.getElementById('viewModalBody').innerHTML = bodyHTML; document.getElementById('viewModal').classList.add('active');
+            if (entry.secret) { document.getElementById('viewOtpCopyBtn').addEventListener('click', async () => { const code = await generateTOTP(entry.secret); navigator.clipboard.writeText(code).then(() => showTempMessage('OTP copied')); }); }
+        }
+
+        function closeViewModal() { document.getElementById('viewModal').classList.remove('active'); currentViewing = null; }
+
+        function deleteCurrentEntry() { if (!currentViewing) return; if (!confirm(`Delete "${currentViewing.entry.title}"? This cannot be undone.`)) return; currentViewing.cat.entries = currentViewing.cat.entries.filter(e => e.id !== currentViewing.entry.id); saveCategories(); closeViewModal(); showTempMessage('Item deleted successfully'); }
+
+        async function copyEntry(categoryId, entryId) { const cat = categories.find(c => c.id == categoryId); if (!cat) return; const entry = cat.entries.find(e => e.id == entryId); if (!entry) return; let text = ''; if (entry.password) text = entry.password; else if (entry.secret) text = await generateTOTP(entry.secret); else if (entry.codes) text = entry.codes.join('\n'); if (!text) { showAlert('Nothing to copy', 'error'); return; } navigator.clipboard.writeText(text).then(() => showTempMessage('Copied to clipboard!')).catch(() => showAlert('Failed to copy', 'error')); }
+
+        function logout() { if (confirm('Are you sure you want to sign out?')) { currentUser = null; categories = []; clearInterval(otpTimer); document.getElementById('dashboard').classList.remove('active'); document.getElementById('loginScreen').style.display = 'flex'; document.getElementById('loginUsername').value = ''; } }
+
+        // --- Base32 decode + TOTP generation (Web Crypto) ---
+        function base32ToBytes(base32) {
+            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+            const clean = (base32 || '').toUpperCase().replace(/=+$/,'').replace(/[^A-Z2-7]/g,'');
+            const bytes = [];
+            let buffer = 0, bitsLeft = 0;
+            for (let i = 0; i < clean.length; i++) {
+                buffer = (buffer << 5) | alphabet.indexOf(clean[i]);
+                bitsLeft += 5;
+                if (bitsLeft >= 8) { bitsLeft -= 8; bytes.push((buffer >>> bitsLeft) & 0xFF); }
+            }
+            return new Uint8Array(bytes);
+        }
+
+        async function generateTOTP(secret, digits = 6, step = 30, algo = 'SHA-1') {
+            try {
+                const keyBytes = base32ToBytes(secret);
+                const counter = Math.floor(Date.now() / 1000 / step);
+                const counterBuf = new ArrayBuffer(8);
+                const view = new DataView(counterBuf);
+                view.setUint32(0, Math.floor(counter / 0x100000000));
+                view.setUint32(4, counter & 0xffffffff);
+                const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: { name: algo } }, false, ['sign']);
+                const sig = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, counterBuf));
+                const offset = sig[sig.length - 1] & 0xf;
+                const bin = ((sig[offset] & 0x7f) << 24) | ((sig[offset + 1] & 0xff) << 16) | ((sig[offset + 2] & 0xff) << 8) | (sig[offset + 3] & 0xff);
+                const otp = (bin % Math.pow(10, digits)).toString().padStart(digits, '0');
+                return otp;
+            } catch (e) { console.error('TOTP error', e); return '??????'; }
+        }
+
+        async function updateOTPCodes() {
+            if (currentViewing && currentViewing.entry && currentViewing.entry.secret) {
+                const codeEl = document.getElementById('viewOtpCode');
+                const bar = document.getElementById('viewOtpBar');
+                if (codeEl) {
+                    const code = await generateTOTP(currentViewing.entry.secret);
+                    codeEl.textContent = code;
+                    const step = 30; const remain = step - (Math.floor(Date.now()/1000) % step);
+                    if (bar) bar.style.width = `${Math.round((remain/step)*100)}%`;
+                }
+            }
+        }
+
+        function startOTPTimer() { if (otpTimer) clearInterval(otpTimer); otpTimer = setInterval(() => updateOTPCodes(), 1000); }
+
+        // --- bootstrapping UI hooks ---
+        (function enhanceAddModal(){
+            const form = document.querySelector('#addModal form'); if (!form) return;
+            const categoryField = document.createElement('div');
+            categoryField.className = 'form-group';
+            categoryField.innerHTML = `
+                <label>Category</label>
+                <div class="input-wrapper">
+                    <select id="entryCategory" onchange="onCategorySelectChange()" style="width:100%; padding:14px 18px; background: rgba(17,24,39,0.6); border:2px solid rgba(255,255,255,0.1); border-radius:12px; color:#e0e0e0; font-size:15px;"></select>
+                </div>
+                <div id="newCategoryWrapper" style="margin-top:12px; display:none;">
+                    <input placeholder="Category name" id="newCategoryName" style="width:100%; padding:10px; margin-bottom:6px;">
+                    <input placeholder="Category username/email (optional)" id="newCategoryUsername" style="width:100%; padding:10px; margin-bottom:6px;">
+                    <input placeholder="Category email (optional)" id="newCategoryEmail" style="width:100%; padding:10px;">
                 </div>
             `;
+            const titleGroup = document.getElementById('entryTitle').closest('.form-group');
+            titleGroup.parentNode.insertBefore(categoryField, titleGroup.nextSibling);
+            window.onCategorySelectChange = onCategorySelectChange;
+        })();
 
-            if (entry.username) {
-                bodyHTML += `
-                    <div style="margin-bottom: 20px;">
-                        <div style="color: #9ca3af; font-size: 13px; margin-bottom: 8px;">Username</div>
-                        <div style="padding: 12px; background: rgba(17, 24, 39, 0.6); border-radius: 8px; font-family: 'Courier New', monospace;">${escapeHtml(entry.username)}</div>
-                    </div>
-                `;
-            }
+        const storedUser = localStorage.getItem('vaultkey_user'); if (storedUser) { document.getElementById('loginUsername').value = JSON.parse(storedUser).username; }
 
-            if (entry.password) {
-                bodyHTML += `
-                    <div style="margin-bottom: 20px;">
-                        <div style="color: #9ca3af; font-size: 13px; margin-bottom: 8px;">Password</div>
-                        <div style="padding: 12px; background: rgba(17, 24, 39, 0.6); border-radius: 8px; font-family: 'Courier New', monospace; word-break: break-all;">${escapeHtml(entry.password)}</div>
-                    </div>
-                `;
-            }
-
-            if (entry.secret) {
-                bodyHTML += `
-                    <div style="margin-bottom: 20px;">
-                        <div style="color: #9ca3af; font-size: 13px; margin-bottom: 8px;">OTP Secret</div>
-                        <div style="padding: 12px; background: rgba(17, 24, 39, 0.6); border-radius: 8px; font-family: 'Courier New', monospace; word-break: break-all;">${escapeHtml(entry.secret)}</div>
-                    </div>
-                `;
-            }
-
-            if (entry.codes && entry.codes.length > 0) {
-                bodyHTML += `
-                    <div style="margin-bottom: 20px;">
-                        <div style="color: #9ca3af; font-size: 13px; margin-bottom: 8px;">Backup Codes</div>
-                        <div style="padding: 12px; background: rgba(17, 24, 39, 0.6); border-radius: 8px; font-family: 'Courier New', monospace;">
-                            ${entry.codes.map(c => escapeHtml(c)).join('<br>')}
-                        </div>
-                    </div>
-                `;
-            }
-
-            if (entry.notes) {
-                bodyHTML += `
-                    <div style="margin-bottom: 20px;">
-                        <div style="color: #9ca3af; font-size: 13px; margin-bottom: 8px;">Notes</div>
-                        <div style="padding: 12px; background: rgba(17, 24, 39, 0.6); border-radius: 8px;">${escapeHtml(entry.notes)}</div>
-                    </div>
-                `;
-            }
-
-            bodyHTML += `
-                <div style="color: #6b7280; font-size: 12px; margin-top: 20px;">
-                    Created: ${new Date(entry.created).toLocaleString()}
-                </div>
-            `;
-
-            document.getElementById('viewModalBody').innerHTML = bodyHTML;
-            document.getElementById('viewModal').classList.add('active');
-        }
-
-        function closeViewModal() {
-            document.getElementById('viewModal').classList.remove('active');
-            currentViewingEntry = null;
-        }
-
-        function deleteCurrentEntry() {
-            if (!currentViewingEntry) return;
-
-            if (confirm(`Delete "${currentViewingEntry.title}"? This cannot be undone.`)) {
-                vault = vault.filter(e => e.id !== currentViewingEntry.id);
-                saveVault();
-                closeViewModal();
-                
-                const alert = document.createElement('div');
-                alert.className = 'alert alert-success';
-                alert.textContent = 'Item deleted successfully';
-                alert.style.position = 'fixed';
-                alert.style.top = '20px';
-                alert.style.right = '20px';
-                alert.style.zIndex = '10000';
-                document.body.appendChild(alert);
-                setTimeout(() => alert.remove(), 3000);
-            }
-        }
-
-        function copyEntry(id) {
-            const entry = vault.find(e => e.id === id);
-            if (!entry) return;
-
-            let textToCopy = '';
-            
-            if (entry.password) {
-                textToCopy = entry.password;
-            } else if (entry.secret) {
-                textToCopy = entry.secret;
-            } else if (entry.codes) {
-                textToCopy = entry.codes.join('\n');
-            }
-
-            navigator.clipboard.writeText(textToCopy).then(() => {
-                const alert = document.createElement('div');
-                alert.className = 'alert alert-success';
-                alert.textContent = 'Copied to clipboard!';
-                alert.style.position = 'fixed';
-                alert.style.top = '20px';
-                alert.style.right = '20px';
-                alert.style.zIndex = '10000';
-                document.body.appendChild(alert);
-                setTimeout(() => alert.remove(), 2000);
-            }).catch(() => {
-                showAlert('Failed to copy', 'error');
-            });
-        }
-
-        function logout() {
-            if (confirm('Are you sure you want to sign out?')) {
-                currentUser = null;
-                vault = [];
-                document.getElementById('dashboard').classList.remove('active');
-                document.getElementById('loginScreen').style.display = 'flex';
-                document.getElementById('loginUsername').value = '';
-            }
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // Check if user is already logged in
-        const storedUser = localStorage.getItem('vaultkey_user');
-        if (storedUser) {
-            document.getElementById('loginUsername').value = JSON.parse(storedUser).username;
-        }
+        window.registerWithKey = registerWithKey; window.loginWithKey = loginWithKey; window.openAddModal = openAddModal; window.closeAddModal = closeAddModal; window.updateEntryFields = updateEntryFields; window.saveEntry = saveEntry; window.viewEntry = viewEntry; window.closeViewModal = closeViewModal; window.deleteCurrentEntry = deleteCurrentEntry; window.copyEntry = copyEntry; window.logout = logout; window.filterByCategory = filterByCategory;
     </script>
 </body>
 </html>
